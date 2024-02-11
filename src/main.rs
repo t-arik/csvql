@@ -18,6 +18,7 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
+
     let f = match fs::File::open(&args.infile) {
         Ok(file) => file,
         Err(error) => {
@@ -38,9 +39,14 @@ fn main() {
         .into_string()
         .unwrap();
 
-    let table = parse_csv(table_name, reader).unwrap();
+    let table = qcsv::Table::from_csv(table_name, reader).unwrap();
+    let query = table.to_sql_query();
 
-    let conn = match sqlite::open(args.outfile) {
+    if args.outfile.as_os_str() == "-" {
+        println!("{query}");
+    }
+
+    let conn = match sqlite::open(&args.outfile) {
         Ok(conn) => conn,
         Err(err) => {
             eprintln!("{err}");
@@ -48,68 +54,8 @@ fn main() {
         }
     };
 
-    match create_table(table, conn) {
-        Ok(()) => process::exit(0),
-        Err(err) => {
-            eprintln!("{err}");
-            process::exit(1);
-        }
+    if let Err(err) = conn.execute(query) {
+        eprintln!("{err}");
+        process::exit(1);
     }
-}
-
-struct Table {
-    name: String,
-    header: csv::StringRecord,
-    records: Vec<csv::StringRecord>,
-}
-
-fn parse_csv<T: io::Read>(name: String, mut reader: csv::Reader<T>) -> Result<Table, String> {
-    let Some(Ok(header)) = reader.records().next() else {
-        return Err("CSV: Could not read header. File may be empty".to_string());
-    };
-
-    let mut records = Vec::new();
-
-    for result in reader.records() {
-        match result {
-            Ok(x) => records.push(x),
-            Err(err) => return Err(err.to_string()),
-        }
-    }
-    return Ok(Table {
-        name,
-        header,
-        records,
-    });
-}
-
-fn create_table(table: Table, conn: sqlite::Connection) -> Result<(), String> {
-    let table_name = table.name;
-    let columns = table
-        .header
-        .iter()
-        .map(|col| format!("\"{}\" TEXT", String::from(col)))
-        .collect::<Vec<String>>()
-        .join(", ");
-
-    let mut query = format!("CREATE TABLE {table_name} ({columns});\n");
-
-    let values_query = table
-        .records
-        .iter()
-        .map(|row| {
-            let values = row
-                .iter()
-                .map(|value| value.replace("'", "''"))
-                .map(|value| format!("'{value}'"))
-                .collect::<Vec<String>>()
-                .join(", ");
-            format!("INSERT INTO {table_name} VALUES ({values});")
-        })
-        .collect::<Vec<String>>()
-        .join("\n");
-
-    query.push_str(&values_query);
-
-    conn.execute(query).map_err(|err| err.to_string())
 }
