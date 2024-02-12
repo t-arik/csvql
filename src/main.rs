@@ -1,61 +1,37 @@
 use clap::Parser;
-use std::fs;
-use std::io;
 use std::path;
 use std::process;
+use qcsv::Table;
+use qcsv::Output;
 
 /// Simple program to turn a csv file into a sqlite database
-#[derive(Parser, Debug)]
+#[derive(Parser, Default)]
 struct Args {
-    /// Input CSV file
-    #[arg(short, long)]
-    infile: path::PathBuf,
+    /// Input CSV files
+    infiles: Vec<path::PathBuf>,
 
     /// Output sqlite file
     #[arg(short, long)]
-    outfile: path::PathBuf,
+    outfile: Option<path::PathBuf>,
 }
 
 fn main() {
     let args = Args::parse();
 
-    let f = match fs::File::open(&args.infile) {
-        Ok(file) => file,
-        Err(error) => {
-            eprintln!("{error}");
-            process::exit(1);
-        }
+    let output: Output = match args.outfile {
+        None => Output::Stdout,
+        Some(outfile) => match Output::from_argument(&outfile) {
+            Ok(out) => out,
+            Err(err) => {
+                eprintln!("{err}");
+                process::exit(1);
+            }
+        },
     };
 
-    let reader = csv::ReaderBuilder::new()
-        .has_headers(false)
-        .from_reader(io::BufReader::new(f));
-
-    let table_name = args
-        .infile
-        .file_stem()
-        .unwrap()
-        .to_os_string()
-        .into_string()
-        .unwrap();
-
-    let table = qcsv::Table::from_csv(table_name, reader).unwrap();
-    let query = table.to_sql_query();
-
-    if args.outfile.as_os_str() == "-" {
-        println!("{query}");
-    }
-
-    let conn = match sqlite::open(&args.outfile) {
-        Ok(conn) => conn,
-        Err(err) => {
-            eprintln!("{err}");
-            process::exit(1);
-        }
-    };
-
-    if let Err(err) = conn.execute(query) {
-        eprintln!("{err}");
-        process::exit(1);
+    for infile in args.infiles {
+        let table = Table::from_csv(&infile).unwrap();
+        let query = table.to_sql_query();
+        output.write(query);
     }
 }
